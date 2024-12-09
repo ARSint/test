@@ -1,186 +1,189 @@
 module wb_to_axi_adapter #(
-    parameter ADDR_WIDTH = 32,
-    parameter DATA_WIDTH = 32,
-    parameter SEL_WIDTH  = 4
+    parameter integer ADDR_WIDTH = 32,
+    parameter integer DATA_WIDTH = 32,
+    parameter integer SEL_WIDTH  = 4
 )(
-    // Wishbone Signals
-    input                   wb_clk_i,
-    input                   wb_rst_i,
-    input [ADDR_WIDTH-1:0]  wb_adr_i,
-    input [DATA_WIDTH-1:0]  wb_dat_i,
-    output reg [DATA_WIDTH-1:0] wb_dat_o,
-    input                   wb_we_i,
-    input                   wb_stb_i,
-    input                   wb_cyc_i,
-    input [SEL_WIDTH-1:0]   wb_sel_i,
-										   
-    output reg              wb_ack_o,
-    output reg              wb_err_o,
+    // Wishbone Interface
+    input wire                        wb_clk_i,
+    input wire                        wb_rst_i,
+    input wire [ADDR_WIDTH-1:0]       wb_adr_i,
+    input wire [DATA_WIDTH-1:0]       wb_dat_i,
+    output reg [DATA_WIDTH-1:0]       wb_dat_o,
+    input wire                        wb_we_i,
+    input wire                        wb_stb_i,
+    input wire                        wb_cyc_i,
+    input wire [SEL_WIDTH-1:0]        wb_sel_i,
+			 
+    output reg                        wb_ack_o,
+    output reg                        wb_err_o,
 
-    // AXI Signals
-    output reg              m_axi_awvalid,
-    input                   m_axi_awready,
-    output reg [ADDR_WIDTH-1:0] m_axi_awaddr,
-    output reg [7:0]        m_axi_awlen,
-    output reg              m_axi_wvalid,
-    input                   m_axi_wready,
-    output reg [DATA_WIDTH-1:0] m_axi_wdata,
-    output reg [SEL_WIDTH-1:0] m_axi_wstrb,
-    output reg              m_axi_wlast,
-    input                   m_axi_bvalid,
-    output reg              m_axi_bready,
-    output reg              m_axi_arvalid,
-    input                   m_axi_arready,
-    output reg [ADDR_WIDTH-1:0] m_axi_araddr,
-    output reg [7:0]        m_axi_arlen,
-    input                   m_axi_rvalid,
-    output reg              m_axi_rready,
-    input [DATA_WIDTH-1:0]  m_axi_rdata,
-    input [1:0]             m_axi_rresp,
-    input [1:0]             m_axi_bresp
+    // AXI Master Interface
+    output reg                        axi_awvalid_o,
+    input wire                        axi_awready_i,
+    output reg [ADDR_WIDTH-1:0]       axi_awaddr_o,
+    output reg [7:0]                  axi_awlen_o,
+    output reg                        axi_wvalid_o,
+    input wire                        axi_wready_i,
+    output reg [DATA_WIDTH-1:0]       axi_wdata_o,
+    output reg [SEL_WIDTH-1:0]        axi_wstrb_o,
+    output reg                        axi_wlast_o,
+    input wire                        axi_bvalid_i,
+    output reg                        axi_bready_o,
+    output reg                        axi_arvalid_o,
+    input wire                        axi_arready_i,
+    output reg [ADDR_WIDTH-1:0]       axi_araddr_o,
+    output reg [7:0]                  axi_arlen_o,
+    input wire                        axi_rvalid_i,
+    output reg                        axi_rready_o,
+    input wire [DATA_WIDTH-1:0]       axi_rdata_i,
+    input wire [1:0]                  axi_rresp_i,
+    input wire [1:0]                  axi_bresp_i
 );
 
-    // FSM States
+    // FSM State Definitions
     typedef enum logic [2:0] {
-        IDLE = 3'b000,
-        WRITE_ADDR = 3'b001,
-        WRITE_DATA = 3'b010,
-        WRITE_RESP = 3'b011,
-        READ_ADDR = 3'b100,
-        READ_DATA = 3'b101,
-        ERROR = 3'b110
-    } state_t;
+        STATE_IDLE        = 3'b000,
+        STATE_WRITE_ADDR  = 3'b001,
+        STATE_WRITE_DATA  = 3'b010,
+        STATE_WRITE_RESP  = 3'b011,
+        STATE_READ_ADDR   = 3'b100,
+        STATE_READ_DATA   = 3'b101,
+        STATE_ERROR       = 3'b110
+    } fsm_state_t;
 
-    state_t current_state, next_state;
+    fsm_state_t current_state, next_state;
 
-    // Burst counter
+    // Burst Counters and Length
     reg [7:0] burst_count;
-    reg [7:0] burst_len;  // Calculated burst length
+    reg [7:0] calculated_burst_len;
 
-    // FSM State Transition Logic
+    // Sequential State Transition
     always @(posedge wb_clk_i or posedge wb_rst_i) begin
-        if (wb_rst_i)
-            current_state <= IDLE;
-        else
+        if (wb_rst_i) begin
+            current_state <= STATE_IDLE;
+        end else begin
             current_state <= next_state;
+        end
     end
 
-always @(*) begin
-        // Default values
-        next_state = current_state;
-        wb_ack_o = 0;
-        wb_err_o = 0;
-        m_axi_awvalid = 0;
-        m_axi_wvalid = 0;
-        m_axi_wlast = 0;
-        m_axi_bready = 0;
-        m_axi_arvalid = 0;
-        m_axi_rready = 0;
+    // FSM Combinational Logic
+    always @(*) begin
+        // Default Outputs
+        next_state         = current_state;
+        wb_ack_o           = 1'b0;
+        wb_err_o           = 1'b0;
+        axi_awvalid_o      = 1'b0;
+        axi_wvalid_o       = 1'b0;
+        axi_wlast_o        = 1'b0;
+        axi_bready_o       = 1'b0;
+        axi_arvalid_o      = 1'b0;
+        axi_rready_o       = 1'b0;
 
         case (current_state)
-            IDLE: begin
+            STATE_IDLE: begin
                 if (wb_stb_i && wb_cyc_i) begin
                     if (wb_we_i) begin
-                        next_state = WRITE_ADDR;
+                        next_state = STATE_WRITE_ADDR;
                     end else begin
-                        next_state = READ_ADDR;
+                        next_state = STATE_READ_ADDR;
                     end
                 end
             end
 
-            WRITE_ADDR: begin
-                m_axi_awvalid = 1;
-                m_axi_awaddr = wb_adr_i;
-                m_axi_awlen = burst_len - 1;
-                if (m_axi_awready) begin
-                    next_state = WRITE_DATA;
+            STATE_WRITE_ADDR: begin
+                axi_awvalid_o = 1'b1;
+                axi_awaddr_o  = wb_adr_i;
+                axi_awlen_o   = calculated_burst_len - 1;
+                if (axi_awready_i) begin
+                    next_state = STATE_WRITE_DATA;
                 end
             end
 
-            WRITE_DATA: begin
-                m_axi_wvalid = 1;
-                m_axi_wdata = wb_dat_i;
-                m_axi_wstrb = wb_sel_i;
-                if (burst_count == burst_len - 1) begin
-                    m_axi_wlast = 1;
+            STATE_WRITE_DATA: begin
+                axi_wvalid_o = 1'b1;
+                axi_wdata_o  = wb_dat_i;
+                axi_wstrb_o  = wb_sel_i;
+                if (burst_count == calculated_burst_len - 1) begin
+                    axi_wlast_o = 1'b1;
                 end
-                if (m_axi_wready) begin
+                if (axi_wready_i) begin
                     burst_count = burst_count + 1;
-                    wb_ack_o = 1; // Acknowledge when AXI slave is ready
-                    if (burst_count == burst_len) begin
-                        next_state = WRITE_RESP;
+                    wb_ack_o = 1'b1; // Acknowledge Wishbone write
+                    if (burst_count == calculated_burst_len) begin
+                        next_state = STATE_WRITE_RESP;
                     end
                 end
             end
 
-            WRITE_RESP: begin
-                m_axi_bready = 1;
-                if (m_axi_bvalid) begin
-                    if (m_axi_bresp == 2'b00) begin
-                        wb_ack_o = 1; // Final acknowledge for write
+            STATE_WRITE_RESP: begin
+                axi_bready_o = 1'b1;
+                if (axi_bvalid_i) begin
+                    if (axi_bresp_i == 2'b00) begin
+                        wb_ack_o = 1'b1; // Final Wishbone acknowledge
                     end else begin
-                        wb_err_o = 1;
+                        wb_err_o = 1'b1;
                     end
-                    next_state = IDLE;
+                    next_state = STATE_IDLE;
                 end
             end
 
-            READ_ADDR: begin
-                m_axi_arvalid = 1;
-                m_axi_araddr = wb_adr_i;
-                m_axi_arlen = burst_len - 1;
-                if (m_axi_arready) begin
-                    next_state = READ_DATA;
+            STATE_READ_ADDR: begin
+                axi_arvalid_o = 1'b1;
+                axi_araddr_o  = wb_adr_i;
+                axi_arlen_o   = calculated_burst_len - 1;
+                if (axi_arready_i) begin
+                    next_state = STATE_READ_DATA;
                 end
             end
 
-            READ_DATA: begin
-                m_axi_rready = 1;
-                if (m_axi_rvalid) begin
-                    wb_dat_o = m_axi_rdata;
+            STATE_READ_DATA: begin
+                axi_rready_o = 1'b1;
+                if (axi_rvalid_i) begin
+                    wb_dat_o    = axi_rdata_i;
                     burst_count = burst_count + 1;
-                    wb_ack_o = 1; // Acknowledge when AXI slave provides valid data
-                    if (burst_count == burst_len) begin
-                        next_state = IDLE;
+                    wb_ack_o    = 1'b1; // Acknowledge Wishbone read
+                    if (burst_count == calculated_burst_len) begin
+                        next_state = STATE_IDLE;
                     end
                 end
-                if (m_axi_rresp != 2'b00) begin
-                    wb_err_o = 1;
-                    next_state = ERROR;
+                if (axi_rresp_i != 2'b00) begin
+                    wb_err_o = 1'b1;
+                    next_state = STATE_ERROR;
                 end
             end
 
-            ERROR: begin
-                wb_err_o = 1;
-                next_state = IDLE;
+            STATE_ERROR: begin
+                wb_err_o = 1'b1;
+                next_state = STATE_IDLE;
             end
         endcase
     end
 
-    // Burst Counter Logic
+    // Burst Counter
     always @(posedge wb_clk_i or posedge wb_rst_i) begin
-        if (wb_rst_i)
-            burst_count <= 0;
-        else if (current_state == WRITE_DATA || current_state == READ_DATA)
+        if (wb_rst_i) begin
+            burst_count <= 8'd0;
+        end else if (current_state == STATE_WRITE_DATA || current_state == STATE_READ_DATA) begin
             burst_count <= burst_count + 1;
-        else
-            burst_count <= 0;
+        end else begin
+            burst_count <= 8'd0;
+        end
     end
 
-    // Calculate burst length based on Wishbone select signals
+    // Burst Length Calculation
     always @(*) begin
-        // Default burst length is 1 if no data is selected
-        burst_len = 1;
+        calculated_burst_len = 1;
+					  
 
-        // Calculate burst length based on wb_sel_i (Wishbone select)
-        // For simplicity, if the select width is 4, each select bit represents 1 byte of data
-        if (wb_sel_i[0]) burst_len = burst_len + 1;
-        if (wb_sel_i[1]) burst_len = burst_len + 1;
-        if (wb_sel_i[2]) burst_len = burst_len + 1;
-        if (wb_sel_i[3]) burst_len = burst_len + 1;
+																	 
+																							  
+        if (wb_sel_i[0]) calculated_burst_len = calculated_burst_len + 1;
+        if (wb_sel_i[1]) calculated_burst_len = calculated_burst_len + 1;
+        if (wb_sel_i[2]) calculated_burst_len = calculated_burst_len + 1;
+        if (wb_sel_i[3]) calculated_burst_len = calculated_burst_len + 1;
 
-        // Ensure burst length doesn't exceed maximum allowed (8 for example)
-        if (burst_len > 8) burst_len = 8;
+																			 
+        if (calculated_burst_len > 8) calculated_burst_len = 8;
     end
 
 endmodule
