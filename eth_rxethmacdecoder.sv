@@ -22,7 +22,11 @@ module eth_rxethmacdecoder (
     output reg  [31:0] first_32bits,  // First 32 bits of data
     output reg  [23:0] address,       // 24-bit address (filled with 0s at MSB)
     output reg  [3:0]  opcode,        // Extracted opcode (bits 3 downto 0)
-    output reg  [15:0] ByteCnt        // Byte counter for received data
+    output reg  [15:0] ByteCnt,       // Byte counter for received data
+
+    // FIFO signals (added as requested)
+    output reg        fifo_wr_en,     // FIFO write enable
+    output reg [31:0] fifo_data       // FIFO data
 );
 
     // State definitions for the FSM
@@ -54,6 +58,8 @@ module eth_rxethmacdecoder (
             ByteCnt         <= 16'b0;
             header_byte_cnt <= 6'b0;
             data_byte_cnt   <= 3'b0;
+            fifo_wr_en      <= 1'b0;
+            fifo_data       <= 32'b0;
         end else begin
             current_state <= next_state;
         end
@@ -113,6 +119,8 @@ module eth_rxethmacdecoder (
             ByteCnt         <= 16'b0;
             header_byte_cnt <= 6'b0;
             data_byte_cnt   <= 3'b0;
+            fifo_wr_en      <= 1'b0;
+            fifo_data       <= 32'b0;
         end else begin
             case (current_state)
                 STATE_SFD: begin
@@ -144,11 +152,20 @@ module eth_rxethmacdecoder (
                     end
                     data_byte_cnt <= data_byte_cnt + 1;
                     ByteCnt <= ByteCnt + 1;
+
+                    // Prepare FIFO data (starting from the second 32-bit data onwards)
+                    if (data_byte_cnt > 1) begin
+                        fifo_wr_en <= 1'b1;
+                        fifo_data <= {fifo_data[23:0], MRxD};  // Write the incoming data to FIFO
+                    end else begin
+                        fifo_wr_en <= 1'b0;
+                    end
                 end
 
                 default: begin
                     // Default case to clear flags and counters
                     RxValid <= 1'b0;
+                    fifo_wr_en <= 1'b0;
                 end
             endcase
 
