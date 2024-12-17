@@ -1,4 +1,4 @@
-module axilite_master_fifos (
+module axilite_fsm (
     input  wire         clk,
     input  wire         reset_n,
 
@@ -17,13 +17,14 @@ module axilite_master_fifos (
     input  wire [31:0]  RDATA,
     input  wire         RVALID,
     output reg          RREADY,
-
-    // TX FIFO (Write to AXI-Lite Slave)
+    // header reg
+    input reg   [43:0] head_reg,//details from opcode {length_reg,first_32bits[31:8],first_32bits[3:0]};
+    // TX FIFO
     input  wire [31:0]  tx_fifo_data,
     input  wire         tx_fifo_empty,
     output reg          tx_fifo_rd_en,
 
-    // RX FIFO (Read from AXI-Lite Slave)
+    // RX FIFO
     output reg [31:0]   rx_fifo_data,
     input  wire         rx_fifo_full,
     output reg          rx_fifo_wr_en,
@@ -34,21 +35,31 @@ module axilite_master_fifos (
 );
 
     // State encoding
-    typedef enum logic [3:0] {
-        IDLE,
-        WRITE_ADDR,
-        WRITE_DATA,
-        WRITE_RESP,
-        READ_ADDR,
-        READ_DATA,
-        ERROR
-    } state_t;
+       parameter logic [3:0] IDLE;
+       parameter logic [3:0] WRITE_ADDR;
+       parameter logic [3:0] WRITE_DATA;
+       parameter logic [3:0] WRITE_RESP;
+       parameter logic [3:0] READ_ADDR;
+       parameter logic [3:0] READ_DATA;
+       parameter logic [3:0] ERROR;
+    
 
-    state_t state, next_state;
-
+    logic [3:0] state, next_state;
+    logic [15:0] byte_count;
     // Timeout counter for error handling
     reg [7:0] timeout_counter;
     localparam TIMEOUT_THRESHOLD = 8'd255;
+
+
+    logic [31:0]address;
+    logic [3:0]opcode;
+    logic [15:0]framelen;
+    logic rw;
+
+    assign address <= head_reg[27:4];
+    assign opcode <= head_reg[3:0];
+    assign rw <= head_reg[0];
+    assign framelen <= head_reg[43:28];
 
     // Sequential State Machine
     always @(posedge clk or negedge reset_n) begin
@@ -83,16 +94,24 @@ module axilite_master_fifos (
         case (state)
             // IDLE: Check if TX FIFO has data or RX FIFO has space
             IDLE: begin
-                if (!tx_fifo_empty)
+                if (!tx_fifo_empty & rw)
                     next_state = WRITE_ADDR;
-                else if (!rx_fifo_full)
+                    wbustcount=0)
+                else if (!rx_fifo_full & !rw)
                     next_state = READ_ADDR;
+                    rbustcount=0)
             end
 
             // WRITE Operation: Address Phase
             WRITE_ADDR: begin
                 AWVALID = 1'b1;
-                AWADDR  = 32'h0000_0000;  // Example address
+                if(wbustcount=0)begin
+                    waddressreg  <= address;  //address axilite
+                end else if(wbustcount!=0 && wbustcount<=framelen-1) begin
+                    waddressreg  <= waddressreg+4;  //address axilite with burst
+                    wbustcount <= wbustcount+1;
+                end
+                AWADDR  = waddressreg; 
                 if (AWREADY)
                     next_state = WRITE_DATA;
                 else if (timeout_counter >= TIMEOUT_THRESHOLD)
@@ -122,7 +141,13 @@ module axilite_master_fifos (
             // READ Operation: Address Phase
             READ_ADDR: begin
                 ARVALID = 1'b1;
-                ARADDR  = 32'h0000_0004;  // Example address
+                if(rbustcount=0)begin
+                    raddressreg  <= address;  //address axilite
+                end else if(wbustcount!=0 && rbustcount<=framelen-1) begin
+                    raddressreg  <= raddressreg+4;  //address axilite with burst
+                    rbustcount <= rbustcount+1;
+                end
+                ARADDR  = raddressreg;  // Example address
                 if (ARREADY)
                     next_state = READ_DATA;
                 else if (timeout_counter >= TIMEOUT_THRESHOLD)
