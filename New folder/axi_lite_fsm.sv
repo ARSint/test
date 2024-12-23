@@ -190,3 +190,132 @@ module axi_lite_fsm (
     end
 
 endmodule
+module APB_to_CSR_shim (
+
+    // APB interface
+    input logic PCLK,
+    input logic PRESETn,
+    input logic PSEL0,
+    input logic PENABLE,
+    input logic PWRITE,
+    input logic [31:0] PADDR,
+    input logic [3:0] PSTRB,
+    input logic [31:0] PWDATA,
+    output logic [31:0] PRDATA,
+    output logic PREADY,
+    output logic PSLVERR,
+
+    // Config Interface 
+    output logic         req_valid,
+    output logic [2:0]   req_opcode,
+    output logic [47:0]  req_addr_mem_offset,
+    output logic  [3:0]  req_be,
+    output logic [31:0]  req_data,
+    //output logic [7:0]   req_sai,
+    //output logic  [7:0]  req_fid,
+    //output logic [2:0]   req_bar,
+
+    input  logic        ack_read_valid,
+    input  logic        ack_write_valid,
+    input  logic        ack_write_miss,
+    input  logic        ack_read_miss,
+    input  logic        ack_sai_successfull,
+    input  logic [31:0] ack_data 
+        
+    );
+
+
+    // internal signals
+    logic  i_slverr_dec;
+    logic [31:0] i_ack_data_ff;
+
+    logic phase_setup;
+    logic phase_access;
+    logic phase_xfer;
+
+    // to CFG node 
+    assign req_valid = PSEL0 & PENABLE;
+    assign req_opcode = PWRITE ? 4'b1: 4'b0; // WR=1, RD=0
+    assign req_addr_mem_offset = {32'b0, PADDR[15:0]}; 
+    assign req_data = PWDATA[31:0];
+    assign req_be = ack_read_valid ? 4'hf : PSTRB[3:0];
+    //assign req_sai = 8'b0;
+    //assign req_fid = 'b0;
+    //assign req_bar = 'b0;
+
+    // to APB 
+    assign i_slverr_dec = ((PWRITE) ? ack_write_miss : ack_read_miss);
+    assign PSLVERR = (phase_xfer) ? i_slverr_dec : 1'b0;
+    assign PREADY  = (PWRITE)?phase_access:phase_xfer;
+    assign PRDATA  = i_ack_data_ff; // valid on phase_xfer
+
+
+    assign phase_setup   = PSEL0&~PENABLE; 
+
+    always_ff @(posedge PCLK or negedge PRESETn ) begin
+        if(!PRESETn) begin 
+            phase_access <= 1'b0; 
+            phase_xfer <= 1'b0;
+        end else  begin 
+  	  if (!PSEL0) begin
+              phase_access <= 1'b0; 
+              phase_xfer <= 1'b0;
+          end
+          else begin
+              // PRDATA must be valid on phase_xfer so latch data 1 clock earlier
+              //APB protocol requirement: setup phase is 1 clock
+              phase_access <= phase_setup;
+              //Xfer happens based on the IP requirements
+              //write happens immediately
+              //read happens immediately but data is sampled to help with timing
+              phase_xfer <= (PWRITE) ? phase_setup : phase_access;
+          end
+	end
+    end
+
+    always_ff @(posedge PCLK or negedge PRESETn ) begin
+        if(!PRESETn) begin 
+            i_ack_data_ff<='b0;
+	end else begin 
+          if (phase_access) i_ack_data_ff <= ack_data;
+	end
+    end
+
+
+    typedef enum logic[2:0] {
+        IDLE_STATE   = 3'b000,
+        SETUP_PHASE  = 3'b001,
+        ACCESS_PHASE = 3'b011,
+        XFER_PHASE   = 3'b111 
+        }  fsm_state_t ;
+
+    fsm_state_t st_current;
+
+    always_comb 
+        st_current = fsm_state_t'({PREADY, PENABLE, PSEL0});
+
+    /*
+    fsm_state_t st_next;
+    always_comb begin
+        st_next = IDLE_STATE;
+
+        case (st_current)
+        IDLE_STATE:
+            if (PSEL0) st_next = SETUP_PHASE;
+            else st_next = IDLE_STATE;
+
+        SETUP_PHASE:
+            st_next = ACCESS_PHASE;
+
+        ACCESS_PHASE:
+            if (!PREADY) st_next = ACCESS_PHASE;
+            else st_next = XFER_STATE;
+
+        default:
+                st_next = IDLE_STATE;
+        endcase;
+    end
+    */
+
+
+endmodule 
