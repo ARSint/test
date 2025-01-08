@@ -32,3 +32,30 @@ FIFO Support: Handles backpressure with FIFO status signals to avoid overflow or
 Error Detection: Supports error signaling for invalid addresses and other controller-detected failures.
 Low-Power Operation: Returns to the IDLE state when not actively processing transactions.
 This module is designed for use in systems requiring efficient APB interfacing with an Ethernet subsystem controller, ensuring proper protocol adherence and robust error handling.
+
+
+Core Functionality
+AXI Transaction Management:
+
+Generates AXI master control signals for read (o_axi_mread) and write (o_axi_mwrite) operations.
+Handles AXI responses (i_axi_sresp and i_axi_svalid) and raises error flags for slave or decode errors.
+FIFO Interface Integration:
+
+Supports seamless data flow using dedicated signals for read and write FIFOs.
+Implements backpressure management using FIFO status signals (write_fifo_empty and read_fifo_full).
+FSM Workflow:
+
+IDLE: Prepares for a new transaction. Resets counters and address registers.
+AXI_REQ: Initiates an AXI read or write operation based on the mode (i_rw).
+AXI_RES: Processes the response from the AXI slave and updates FIFOs or raises error flags accordingly.
+Address and Byte Counter Management:
+
+Automatically increments addresses and counters during a transaction to support multi-byte transfers.
+Tracks progress using the counter register and byte-length input (byte_length).
+Error Handling:
+
+Detects and processes AXI slave errors (SLVERR) and decode errors.
+Provides clear status flags (o_axi_slverr, o_axi_decoderr) for error reporting.
+Mode Selection:
+
+Operates in AXI mode when i_fuse_enable is low (logic 0).
