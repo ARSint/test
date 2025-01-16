@@ -1,35 +1,32 @@
-FIFO Depth Calculation for Burst Data
+Hash Table Algorithm for Address Filtering
+Address Mapping:
 
-Parameters:
+Any 48-bit address (e.g., the destination MAC address) is input to a hash function.
+The result of this hash function is a value between 0 and 63, corresponding to one of 64 hash table entries.
+Hash Table Registers:
 
-Burst Size: 1500 bytes
+The 64-bit hash table is implemented using two 32-bit registers:
+HASH0 (lower 32 bits).
+HASH1 (upper 32 bits).
+Together, HASH0 and HASH1 form a single 64-bit hash table.
+Frame Acceptance Criteria:
 
-FIFO Data Width: 32 bits (4 bytes per word)
+The Ethernet controller uses the hash function result to index into the hash table.
+If the corresponding bit in the hash table (i.e., in HASH0 or HASH1) is set to 1, the frame is accepted.
+If the bit is 0, the frame is rejected.
+Key Steps:
+Hash Function Computation:
 
-Write Clock: 10 MHz
+Compute a hash value (e.g., using a CRC or XOR-based algorithm) from the 48-bit destination address.
+The hash function reduces the 48-bit address to a 6-bit index.
+Index Mapping:
 
-Read Clock: 100 MHz
+The 6-bit hash result determines the bit position in the hash table:
+If the hash result is N (0–63):
+If N < 32, the bit is in HASH0.
+If N ≥ 32, the bit is in HASH1.
+Check Bit Status:
 
-Step 1: Number of FIFO Words Needed
-
-Each FIFO word can hold 4 bytes. Therefore, the total number of words required to store the 1500-byte burst is:
-
-Step 2: Clock Domain Mismatch Handling
-
-The write clock (10 MHz) and read clock (100 MHz) introduce a rate mismatch. To ensure the FIFO does not overflow or underflow:
-
-Write Rate: 1 word is written every .
-
-Read Rate: 1 word is read every .
-
-For a 1500-byte burst (375 words):
-
-Time to Write the Burst:
-
-Words Read in the Same Time:
-
-Since the read clock is faster, the FIFO won’t overflow during this burst.
-
-Step 3: FIFO Depth Recommendation
-
-Minimum FIFO Depth: To hold the burst, you need at least 375 words
+Check the bit at position N in the hash table:
+If 1: Frame is accepted.
+If 0: Frame is discarded.
